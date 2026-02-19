@@ -39,12 +39,9 @@ mod stdp {
                 .unwrap_or(remaining.len());
             let value = u32::from_str_radix(&remaining[..end_idx], if is_hex { 16 } else { 10 })
                 .map_err(|_| ())?;
-            // подсказка: вместо if можно использовать tight-тип std::num::NonZeroU32
-            //            (ограничиться NonZeroU32::new(value).ok_or(()).get() - норм)
-            //            или даже заиспользовать tightness
-            if value == 0 {
-                return Err(()); // в наших логах нет нулей, ноль в операции - фикция
-            }
+
+            std::num::NonZeroU32::new(value).ok_or(())?;
+            
             Ok((remaining[end_idx..].to_string(), value))
         }
     }
