@@ -49,12 +49,17 @@
 //   --- нет сети
 //   --- отказано в доступе
 use clap::Parser;
+use analysis::ReadMode;
 
 #[derive(Parser)]
 struct Args {
     /// Path to a log file
     /// #[arg(long)]
     file: String,
+
+    /// Mode: all | errors | exchanges
+    #[arg(value_enum, default_value_t = ReadMode::All)]
+    mode: ReadMode,
 }
 
 fn main() {
@@ -77,7 +82,7 @@ fn main() {
         std::cell::RefCell::new(Box::new(std::fs::File::open(filename).unwrap())),
     );
 
-    let logs = analysis::read_log(file.clone(), analysis::READ_MODE_ALL, vec![]);
+    let logs = analysis::read_log(file.clone(), args.mode, vec![]);
     println!("got logs:");
     logs.iter().for_each(|parsed| println!("  {:?}", parsed));
 }

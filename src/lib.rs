@@ -1,13 +1,13 @@
 pub mod parse;
 use parse::*;
+use clap::{ValueEnum};
 
-// подсказка: лучше использовать enum и match
-/// Режим чтения из логов всего подряд
-pub const READ_MODE_ALL: u8 = 0;
-/// Режим чтения из логов только ошибок
-pub const READ_MODE_ERRORS: u8 = 1;
-/// Режим чтения из логов только операций, касающихся деген
-pub const READ_MODE_EXCHANGES: u8 = 2;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ReadMode {
+    All,
+    Errors,
+    Exchanges,
+}
 
 /// Обёртка, без которой не выполнено требование `std::io::BufReader<T: std::io::Read>`
 #[derive(Debug)]
@@ -75,7 +75,7 @@ impl Iterator for LogIterator {
 /// Принимает поток байт, отдаёт отфильтрованные и распарсенные логи
 pub fn read_log(
     input: std::rc::Rc<std::cell::RefCell<Box<dyn MyReader>>>,
-    mode: u8,
+    mode: ReadMode,
     request_ids: Vec<u32>,
 ) -> Vec<LogLine> {
     let logs = LogIterator::new(input);
@@ -92,20 +92,10 @@ pub fn read_log(
             }
             request_id_found
         }
-        // подсказка: лучше match
-        && if mode == READ_MODE_ALL {
-                true
-            }
-            else if mode == READ_MODE_ERRORS {
-                matches!(
-                    &log.kind,
-                    LogKind::System(
-                        SystemLogKind::Error(_)) | LogKind::App(AppLogKind::Error(_)
-                    )
-                )
-            }
-            else if mode == READ_MODE_EXCHANGES {
-                matches!(
+
+            && match mode {
+                ReadMode::All => true,
+                ReadMode::Exchanges => matches!(
                     &log.kind,
                     LogKind::App(AppLogKind::Journal(
                         AppLogJournalKind::BuyAsset(_)
@@ -115,11 +105,14 @@ pub fn read_log(
                         | AppLogJournalKind::DepositCash(_)
                         | AppLogJournalKind::WithdrawCash(_)
                     ))
-                )
-            }
-            else {
-                // подсказка: паниковать в библиотечном коде - нехорошо
-                panic!("unknown mode {}", mode)
+
+                ),
+                ReadMode::Errors => matches!(
+                    &log.kind,
+                    LogKind::System(
+                        SystemLogKind::Error(_)) | LogKind::App(AppLogKind::Error(_)
+                    )
+                ),
             }
         {
             collected.push(log);
@@ -202,10 +195,10 @@ App::Journal BuyAsset UserBacket{"user_id":"Alice","backet":Backet{"asset_id":"m
     fn test_all() {
         let refcell1: std::rc::Rc<std::cell::RefCell<Box<dyn MyReader>>> =
             std::rc::Rc::new(std::cell::RefCell::new(Box::new(SOURCE1.as_bytes())));
-        assert_eq!(read_log(refcell1.clone(), READ_MODE_ALL, vec![]).len(), 1);
+        assert_eq!(read_log(refcell1.clone(), ReadMode::All, vec![]).len(), 1);
         let refcell: std::rc::Rc<std::cell::RefCell<Box<dyn MyReader>>> =
             std::rc::Rc::new(std::cell::RefCell::new(Box::new(SOURCE.as_bytes())));
-        let all_parsed = read_log(refcell.clone(), READ_MODE_ALL, vec![]);
+        let all_parsed = read_log(refcell.clone(), ReadMode::All, vec![]);
         println!("all parsed:");
         all_parsed
             .iter()
