@@ -48,8 +48,17 @@
 //  -- Error
 //   --- нет сети
 //   --- отказано в доступе
+use clap::Parser;
+
+#[derive(Parser)]
+struct Args {
+    /// Path to a log file
+    /// #[arg(long)]
+    file: String,
+}
+
 fn main() {
-    println!("Placeholder для экспериментов с cli");
+    let args = Args::parse();
 
     let parsing_demo =
         r#"[UserBackets{"user_id":"Bob","backets":[Backet{"asset_id":"milk","count":3,},],},]"#
@@ -57,8 +66,8 @@ fn main() {
     let announcements = analysis::parse::just_parse_anouncements(parsing_demo).unwrap();
     println!("demo-parsed: {:?}", announcements);
 
-    let args = std::env::args().collect::<Vec<_>>();
-    let filename = args[1].clone();
+    let filename = args.file;
+
     println!(
         "Trying opening file '{}' from directory '{}'",
         filename,
