@@ -82,7 +82,7 @@ fn main() {
         std::cell::RefCell::new(Box::new(std::fs::File::open(filename).unwrap())),
     );
 
-    let logs = analysis::read_log(file.clone(), args.mode, vec![]);
+    let logs = analysis::read_log(file.clone(), args.mode, &[]);
     println!("got logs:");
     logs.iter().for_each(|parsed| println!("  {:?}", parsed));
 }

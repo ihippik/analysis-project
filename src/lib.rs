@@ -76,7 +76,7 @@ impl Iterator for LogIterator {
 pub fn read_log(
     input: std::rc::Rc<std::cell::RefCell<Box<dyn MyReader>>>,
     mode: ReadMode,
-    request_ids: Vec<u32>,
+    request_ids: &[u32],
 ) -> Vec<LogLine> {
     let logs = LogIterator::new(input);
     let mut collected = Vec::new();
@@ -84,7 +84,7 @@ pub fn read_log(
     for log in logs {
         if request_ids.is_empty() || {
             let mut request_id_found = false;
-            for request_id in &request_ids {
+            for request_id in request_ids {
                 if *request_id == log.request_id {
                     request_id_found = true;
                     break;
@@ -195,10 +195,10 @@ App::Journal BuyAsset UserBacket{"user_id":"Alice","backet":Backet{"asset_id":"m
     fn test_all() {
         let refcell1: std::rc::Rc<std::cell::RefCell<Box<dyn MyReader>>> =
             std::rc::Rc::new(std::cell::RefCell::new(Box::new(SOURCE1.as_bytes())));
-        assert_eq!(read_log(refcell1.clone(), ReadMode::All, vec![]).len(), 1);
+        assert_eq!(read_log(refcell1.clone(), ReadMode::All, &[]).len(), 1);
         let refcell: std::rc::Rc<std::cell::RefCell<Box<dyn MyReader>>> =
             std::rc::Rc::new(std::cell::RefCell::new(Box::new(SOURCE.as_bytes())));
-        let all_parsed = read_log(refcell.clone(), ReadMode::All, vec![]);
+        let all_parsed = read_log(refcell.clone(), ReadMode::All, &[]);
         println!("all parsed:");
         all_parsed
             .iter()
