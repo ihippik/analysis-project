@@ -13,19 +13,20 @@ pub enum ReadMode {
 // подсказка: вместо trait-объекта можно дженерик
 /// Итератор, на выходе которого - строки распарсенной структуры данных
 
-struct LogIterator<'a> {
-    reader: io::BufReader<&'a mut dyn Read>,
+struct LogIterator<R: Read> {
+    reader: io::BufReader<R>,
     buf: String,
 }
-impl<'a> LogIterator<'a> {
-    fn new(r: &'a mut dyn Read) -> Self {
+impl<R: Read> LogIterator<R> {
+    fn new(r: R) -> Self {
         Self {
             reader: io::BufReader::with_capacity(4096, r),
             buf: String::new(),
         }
     }
 }
-impl<'a> Iterator for LogIterator<'a> {
+
+impl<R: Read> Iterator for LogIterator<R> {
     type Item = parse::LogLine;
 
     fn next(&mut self) -> Option<Self::Item> {
