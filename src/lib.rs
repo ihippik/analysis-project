@@ -10,9 +10,6 @@ pub enum ReadMode {
     Exchanges,
 }
 
-// подсказка: вместо trait-объекта можно дженерик
-/// Итератор, на выходе которого - строки распарсенной структуры данных
-
 struct LogIterator<R: Read> {
     reader: io::BufReader<R>,
     buf: String,
