@@ -40,8 +40,8 @@ impl<R: Read> Iterator for LogIterator<R> {
                 continue;
             }
 
-            // Пока оставляем как есть (есть аллокация). Потом уберём.
-            let (remaining, result) = LOG_LINE_PARSER.parse(line.to_string()).ok()?;
+            let (remaining, result) = LOG_LINE_PARSER.parse(line).ok()?;
+
             if remaining.trim().is_empty() {
                 return Some(result);
             }
@@ -167,8 +167,6 @@ App::Journal BuyAsset UserBacket{"user_id":"Alice","backet":Backet{"asset_id":"m
         all_parsed
             .iter()
             .for_each(|parsed| println!("  {:?}", parsed));
-        // 2 для начала и конца строки (чтобы первая и последняя кавычки на отдельных строках были)
-        // второе число - число пустых строк, которые оставлены для удобства чтения
 
         assert_eq!(all_parsed.len(), SOURCE.lines().count() - 2 - 7);
     }

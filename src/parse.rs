@@ -1,85 +1,122 @@
-/// Трейт, чтобы **реализовывать** и **требовать** метод 'распарсь и покажи,
-/// что распарсить осталось'
 trait Parser {
     type Dest;
-    // подсказка: здесь можно переделать
-    // на `fn parse<'a>(&self,input:&'a str)->Result<(&'a str, Self::Dest)>`
-    // (возможно, самое трудоёмкое; в своих проектах проще сразу не допускать)
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()>;
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()>;
 }
-/// Вспомогательный трейт, чтобы писать собственный десериализатор
-/// (по решаемой задаче - отдалённый аналог `serde::Deserialize`)
+
 trait Parsable: Sized {
     type Parser: Parser<Dest = Self>;
     fn parser() -> Self::Parser;
 }
 
 mod stdp {
-    // parsers for std types
     use super::Parser;
 
-    /// Беззнаковые числа
     #[derive(Debug)]
     pub struct U32;
+
     impl Parser for U32 {
         type Dest = u32;
-        fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-            let (remaining, is_hex) = input
-                .strip_prefix("0x")
-                .map_or((input.to_string(), false), |remaining| {
-                    (remaining.to_string(), true)
-                });
-            let end_idx = remaining
-                .char_indices()
-                .find_map(|(idx, c)| match (is_hex, c) {
-                    (true, 'a'..='f' | '0'..='9' | 'A'..='F') => None,
-                    (false, '0'..='9') => None,
-                    _ => Some(idx),
-                })
-                .unwrap_or(remaining.len());
-            let value = u32::from_str_radix(&remaining[..end_idx], if is_hex { 16 } else { 10 })
-                .map_err(|_| ())?;
 
-            std::num::NonZeroU32::new(value).ok_or(())?;
-            
-            Ok((remaining[end_idx..].to_string(), value))
+        fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+            let (rest, base) = match input.strip_prefix("0x") {
+                Some(r) => (r, 16),
+                None => (input, 10),
+            };
+
+            if rest.is_empty() {
+                return Err(());
+            }
+
+            let end = rest
+                .char_indices()
+                .find_map(|(i, c)| {
+                    let ok = match base {
+                        16 => c.is_ascii_hexdigit(),
+                        _ => c.is_ascii_digit(),
+                    };
+                    (!ok).then_some(i)
+                })
+                .unwrap_or(rest.len());
+
+            if end == 0 {
+                return Err(());
+            }
+
+            let value = u32::from_str_radix(&rest[..end], base).map_err(|_| ())?;
+
+            if value == 0 {
+                return Err(());
+            }
+
+            Ok((&rest[end..], value))
         }
     }
-    /// Знаковые числа
+
     #[derive(Debug)]
     pub struct I32;
     impl Parser for I32 {
         type Dest = i32;
-        fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-            let end_idx = input
-                .char_indices()
-                .skip(1)
-                .find_map(|(idx, c)| (!c.is_ascii_digit()).then_some(idx))
-                .unwrap_or(input.len());
-            let value = input[..end_idx].parse().map_err(|_| ())?;
-            if value == 0 {
-                return Err(()); // в наших логах нет нулей, ноль в операции - фикция
-            }
-            Ok((input[end_idx..].to_string(), value))
-        }
-    }
-    /// Шестнадцатеричные байты (пригодится при парсинге блобов)
-    #[derive(Debug, Clone)]
-    pub struct Byte;
-    impl Parser for Byte {
-        type Dest = u8;
-        fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-            let (to_parse, remaining) = input.split_at_checked(2).ok_or(())?;
-            if !to_parse.chars().all(|c| c.is_ascii_hexdigit()) {
+        fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+            if input.is_empty() {
                 return Err(());
             }
-            let value = u8::from_str_radix(to_parse, 16).map_err(|_| ())?;
-            Ok((remaining.to_string(), value))
+
+            let (rest, negative) = match input.strip_prefix('-') {
+                Some(r) => (r, true),
+                None => (input, false),
+            };
+
+            if rest.is_empty() {
+                return Err(());
+            }
+
+            let end = rest
+                .char_indices()
+                .find_map(|(i, c)| (!c.is_ascii_digit()).then_some(i))
+                .unwrap_or(rest.len());
+
+            if end == 0 {
+                return Err(());
+            }
+
+            let digits = &rest[..end];
+
+            let mut value: i32 = digits.parse().map_err(|_| ())?;
+            if negative {
+                value = -value;
+            }
+
+            if value == 0 {
+                return Err(());
+            }
+
+            Ok((&rest[end..], value))
+        }
+    }
+    #[derive(Debug, Clone, Copy)]
+    pub struct Byte;
+
+    impl Parser for Byte {
+        type Dest = u8;
+
+        fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+            if input.len() < 2 {
+                return Err(());
+            }
+
+            let s = &input[..2];
+
+            // строго два hex-символа (ASCII)
+            if !s.as_bytes().iter().all(|&b| b.is_ascii_hexdigit()) {
+                return Err(());
+            }
+
+            let value = u8::from_str_radix(s, 16).map_err(|_| ())?;
+            Ok((&input[2..], value))
         }
     }
 }
 
-/// Обернуть строку в кавычки, экранировав кавычки, которые в строке уже есть
 fn quote(input: &str) -> String {
     let mut result = String::from("\"");
     result.extend(
@@ -94,120 +131,117 @@ fn quote(input: &str) -> String {
     result.push('"');
     result
 }
-/// Распарсить строку, которую ранее [обернули в кавычки](quote)
-// `"abc\"def\\ghi"nice` -> (`abcd"def\ghi`, `nice`)
-fn do_unquote(input: String) -> Result<(String, String), ()> {
+
+fn do_unquote<'a>(input: &'a str) -> Result<(&'a str, String), ()> {
+    let mut it = input.strip_prefix('"').ok_or(())?.chars();
+
     let mut result = String::new();
-    let mut escaped_now = false;
-    let mut chars = input.strip_prefix("\"").ok_or(())?.chars();
-    while let Some(c) = chars.next() {
-        match (c, escaped_now) {
-            ('"' | '\\', true) => {
+    let mut escaped = false;
+
+    while let Some(c) = it.next() {
+        match (c, escaped) {
+            ('"', false) => return Ok((it.as_str(), result)),
+            ('\\', false) => escaped = true,
+            (c, true) => {
                 result.push(c);
-                escaped_now = false;
+                escaped = false;
             }
-            ('\\', false) => escaped_now = true,
-            ('"', false) => return Ok((chars.as_str().to_string(), result)),
-            (c, _) => {
-                result.push(c);
-                escaped_now = false;
-            }
+            (c, false) => result.push(c),
         }
     }
-    Err(()) // строка кончилась, не закрыв кавычку
+
+    Err(())
 }
-/// Распарсить строку, обёрную в кавычки
-/// (сокращённая версия [do_unquote], в которой вложенные кавычки не предусмотрены)
-fn do_unquote_non_escaped(input: String) -> Result<(String, String), ()> {
-    let input = input.strip_prefix("\"").ok_or(())?;
-    let quote_byteidx = input.find('"').ok_or(())?;
-    if 0 == quote_byteidx || Some("\\") == input.get(quote_byteidx - 1..quote_byteidx) {
+
+fn do_unquote_non_escaped<'a>(input: &'a str) -> Result<(&'a str, &'a str), ()> {
+    let s = input.strip_prefix('"').ok_or(())?;
+    let pos = s.find('"').ok_or(())?;
+
+    if pos > 0 && s.as_bytes()[pos - 1] == b'\\' {
         return Err(());
     }
-    Ok((
-        input[1 + quote_byteidx..].to_string(),
-        input[..quote_byteidx].to_string(),
-    ))
+
+    let candidate = &s[..pos];
+    let remaining = &s[pos + 1..];
+    Ok((remaining, candidate))
 }
-/// Парсер кавычек
+
 #[derive(Debug, Clone)]
 struct Unquote;
 impl Parser for Unquote {
     type Dest = String;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         do_unquote(input)
     }
 }
-/// Конструктор [Unquote]
+
 fn unquote() -> Unquote {
     Unquote
 }
-/// Парсер, возвращающий результат как есть
+
 #[derive(Debug, Clone)]
 struct AsIs;
 impl Parser for AsIs {
     type Dest = String;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        Ok((input[input.len()..].to_string(), input.into()))
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        Ok(("", input.to_owned()))
     }
 }
-/// Парсер константных строк
-/// (аналог `nom::bytes::complete::tag`)
+
 #[derive(Debug, Clone)]
 struct Tag {
     tag: &'static str,
 }
 impl Parser for Tag {
     type Dest = ();
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        Ok((input.strip_prefix(self.tag).ok_or(())?.to_string(), ()))
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        let rem = input.strip_prefix(self.tag).ok_or(())?;
+        Ok((rem, ()))
     }
 }
-/// Конструктор [Tag]
+
 fn tag(tag: &'static str) -> Tag {
     Tag { tag }
 }
-/// Парсер [тэга](Tag), обёрнутого в кавычки
+
 #[derive(Debug, Clone)]
 struct QuotedTag(Tag);
 impl Parser for QuotedTag {
     type Dest = ();
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         let (remaining, candidate) = do_unquote_non_escaped(input)?;
-        if !self.0.parse(candidate)?.0.is_empty() {
+        let (rest, _) = self.0.parse(candidate)?;
+        if !rest.is_empty() {
             return Err(());
         }
         Ok((remaining, ()))
     }
 }
-/// Конструктор [QuotedTag]
+
 fn quoted_tag(tag: &'static str) -> QuotedTag {
     QuotedTag(Tag { tag })
 }
-/// Комбинатор, пробрасывающий строку без лидирующих пробелов
+
 #[derive(Debug, Clone)]
 struct StripWhitespace<T> {
     parser: T,
 }
 impl<T: Parser> Parser for StripWhitespace<T> {
     type Dest = T::Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        self.parser
-            .parse(input.trim_start().to_string())
-            .map(|(remaining, parsed)| (remaining.trim_start().to_string(), parsed))
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        let input = input.trim_start();
+        let (remaining, parsed) = self.parser.parse(input)?;
+        Ok((remaining.trim_start(), parsed))
     }
 }
-/// Конструктор [StripWhitespace]
+
 fn strip_whitespace<T: Parser>(parser: T) -> StripWhitespace<T> {
     StripWhitespace { parser }
 }
-/// Комбинатор, чтобы распарсить нужное, окружённое в начале и в конце чем-то
-/// обязательным, не участвующем в результате.
-/// Пробрасывает строку в парсер1, оставшуюся строку после первого
-/// парсинга - в парсер2, оставшуюся строку после второго парсинга - в парсер3.
-/// Результат парсера2 будет результатом этого комбинатора, а оставшейся
-/// строкой - строка, оставшаяся после парсера3.
-/// (аналог `delimited` из `nom`)
+
 #[derive(Debug, Clone)]
 struct Delimited<Prefix, T, Suffix> {
     prefix_to_ignore: Prefix,
@@ -221,15 +255,15 @@ where
     Suffix: Parser,
 {
     type Dest = T::Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         let (remaining, _) = self.prefix_to_ignore.parse(input)?;
         let (remaining, result) = self.dest_parser.parse(remaining)?;
-        self.suffix_to_ignore
-            .parse(remaining)
-            .map(|(remaining, _)| (remaining, result))
+        let (remaining, _) = self.suffix_to_ignore.parse(remaining)?;
+        Ok((remaining, result))
     }
 }
-/// Конструктор [Delimited]
+
 fn delimited<Prefix, T, Suffix>(
     prefix_to_ignore: Prefix,
     dest_parser: T,
@@ -246,27 +280,33 @@ where
         suffix_to_ignore,
     }
 }
-/// Комбинатор-отображение. Парсит дочерним парсером, преобразует результат так,
-/// как вызывающему хочется
+
 #[derive(Debug, Clone)]
 struct Map<T, M> {
     parser: T,
     map: M,
 }
-impl<T: Parser, Dest: Sized, M: Fn(T::Dest) -> Dest> Parser for Map<T, M> {
+impl<T, Dest, M> Parser for Map<T, M>
+where
+    T: Parser,
+    M: Fn(T::Dest) -> Dest,
+{
     type Dest = Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        self.parser
-            .parse(input)
-            .map(|(remaining, pre_result)| (remaining, (self.map)(pre_result)))
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        let (remaining, pre) = self.parser.parse(input)?;
+        Ok((remaining, (self.map)(pre)))
     }
 }
-/// Конструктор [Map]
-fn map<T: Parser, Dest: Sized, M: Fn(T::Dest) -> Dest>(parser: T, map: M) -> Map<T, M> {
+
+fn map<T, Dest, M>(parser: T, map: M) -> Map<T, M>
+where
+    T: Parser,
+    M: Fn(T::Dest) -> Dest,
+{
     Map { parser, map }
 }
-/// Комбинатор с отбрасываемым префиксом, упрощённая версия [Delimited]
-/// (аналог `preceeded` из `nom`)
+
 #[derive(Debug, Clone)]
 struct Preceded<Prefix, T> {
     prefix_to_ignore: Prefix,
@@ -278,12 +318,13 @@ where
     T: Parser,
 {
     type Dest = T::Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         let (remaining, _) = self.prefix_to_ignore.parse(input)?;
         self.dest_parser.parse(remaining)
     }
 }
-/// Конструктор [Preceded]
+
 fn preceded<Prefix, T>(prefix_to_ignore: Prefix, dest_parser: T) -> Preceded<Prefix, T>
 where
     Prefix: Parser,
@@ -294,8 +335,7 @@ where
         dest_parser,
     }
 }
-/// Комбинатор, который требует, чтобы все дочерние парсеры отработали,
-/// (аналог `all` из `nom`)
+
 #[derive(Debug, Clone)]
 struct All<T> {
     parser: T,
@@ -306,16 +346,14 @@ where
     A1: Parser,
 {
     type Dest = (A0::Dest, A1::Dest);
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         let (remaining, a0) = self.parser.0.parse(input)?;
-        self.parser
-            .1
-            .parse(remaining)
-            .map(|(remaining, a1)| (remaining, (a0, a1)))
+        let (remaining, a1) = self.parser.1.parse(remaining)?;
+        Ok((remaining, (a0, a1)))
     }
 }
-/// Конструктор [All] для двух парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn all2<A0: Parser, A1: Parser>(a0: A0, a1: A1) -> All<(A0, A1)> {
     All { parser: (a0, a1) }
 }
@@ -326,42 +364,19 @@ where
     A2: Parser,
 {
     type Dest = (A0::Dest, A1::Dest, A2::Dest);
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        let (remaining, a0) = self.parser.0.parse(input)?;
-        let (remaining, a1) = self.parser.1.parse(remaining)?;
-        self.parser
-            .2
-            .parse(remaining)
-            .map(|(remaining, a2)| (remaining, (a0, a1, a2)))
-    }
-}
-/// Конструктор [All] для трёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
-fn all3<A0: Parser, A1: Parser, A2: Parser>(a0: A0, a1: A1, a2: A2) -> All<(A0, A1, A2)> {
-    All {
-        parser: (a0, a1, a2),
-    }
-}
-impl<A0, A1, A2, A3> Parser for All<(A0, A1, A2, A3)>
-where
-    A0: Parser,
-    A1: Parser,
-    A2: Parser,
-    A3: Parser,
-{
-    type Dest = (A0::Dest, A1::Dest, A2::Dest, A3::Dest);
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         let (remaining, a0) = self.parser.0.parse(input)?;
         let (remaining, a1) = self.parser.1.parse(remaining)?;
         let (remaining, a2) = self.parser.2.parse(remaining)?;
-        self.parser
-            .3
-            .parse(remaining)
-            .map(|(remaining, a3)| (remaining, (a0, a1, a2, a3)))
+        Ok((remaining, (a0, a1, a2)))
     }
 }
-/// Конструктор [All] для четырёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
+fn all3<A0: Parser, A1: Parser, A2: Parser>(a0: A0, a1: A1, a2: A2) -> All<(A0, A1, A2)> {
+    All { parser: (a0, a1, a2) }
+}
+
 fn all4<A0: Parser, A1: Parser, A2: Parser, A3: Parser>(
     a0: A0,
     a1: A1,
@@ -372,9 +387,7 @@ fn all4<A0: Parser, A1: Parser, A2: Parser, A3: Parser>(
         parser: (a0, a1, a2, a3),
     }
 }
-/// Комбинатор, который вытаскивает значения из пары `"ключ":значение,`.
-/// Для простоты реализации, запятая всегда нужна в конце пары ключ-значение,
-/// простое '"ключ":значение' читаться не будет
+
 #[derive(Debug, Clone)]
 struct KeyValue<T> {
     parser: Delimited<
@@ -388,11 +401,12 @@ where
     T: Parser,
 {
     type Dest = T::Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         self.parser.parse(input)
     }
 }
-/// Конструктор [KeyValue]
+
 fn key_value<T: Parser>(key: &'static str, value_parser: T) -> KeyValue<T> {
     KeyValue {
         parser: delimited(
@@ -405,10 +419,7 @@ fn key_value<T: Parser>(key: &'static str, value_parser: T) -> KeyValue<T> {
         ),
     }
 }
-/// Комбинатор, который возвращает результаты дочерних парсеров, если их
-/// удалось применить друг после друга в любом порядке. Результат возвращается в
-/// том порядке, в каком `Permutation` был сконструирован
-/// (аналог `permutation` из `nom`)
+
 #[derive(Debug, Clone)]
 struct Permutation<T> {
     parsers: T,
@@ -419,24 +430,19 @@ where
     A1: Parser,
 {
     type Dest = (A0::Dest, A1::Dest);
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        match self.parsers.0.parse(input.clone()) {
-            Ok((remaining, a0)) => self
-                .parsers
-                .1
-                .parse(remaining)
-                .map(|(remaining, a1)| (remaining, (a0, a1))),
-            Err(()) => self.parsers.1.parse(input).and_then(|(remaining, a1)| {
-                self.parsers
-                    .0
-                    .parse(remaining)
-                    .map(|(remaining, a0)| (remaining, (a0, a1)))
-            }),
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        if let Ok((remaining, a0)) = self.parsers.0.parse(input) {
+            let (remaining, a1) = self.parsers.1.parse(remaining)?;
+            return Ok((remaining, (a0, a1)));
         }
+
+        let (remaining, a1) = self.parsers.1.parse(input)?;
+        let (remaining, a0) = self.parsers.0.parse(remaining)?;
+        Ok((remaining, (a0, a1)))
     }
 }
-/// Конструктор [Permutation] для двух парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn permutation2<A0: Parser, A1: Parser>(a0: A0, a1: A1) -> Permutation<(A0, A1)> {
     Permutation { parsers: (a0, a1) }
 }
@@ -447,72 +453,53 @@ where
     A2: Parser,
 {
     type Dest = (A0::Dest, A1::Dest, A2::Dest);
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        match self.parsers.0.parse(input.clone()) {
-            Ok((remaining, a0)) => match self.parsers.1.parse(remaining.clone()) {
-                Ok((remaining, a1)) => self
-                    .parsers
-                    .2
-                    .parse(remaining)
-                    .map(|(remaining, a2)| (remaining, (a0, a1, a2))),
-                Err(()) => self
-                    .parsers
-                    .2
-                    .parse(remaining.clone())
-                    .and_then(|(remaining, a2)| {
-                        self.parsers
-                            .1
-                            .parse(remaining)
-                            .map(|(remaining, a1)| (remaining, (a0, a1, a2)))
-                    }),
-            },
-            Err(()) => {
-                match self.parsers.1.parse(input.clone()) {
-                    Ok((remaining, a1)) => {
-                        match self.parsers.0.parse(remaining.clone()) {
-                            Ok((remaining, a0)) => self
-                                .parsers
-                                .2
-                                .parse(remaining)
-                                .map(|(remaining, a2)| (remaining, (a0, a1, a2))),
-                            Err(()) => self.parsers.2.parse(remaining.clone()).and_then(
-                                |(remaining, a2)| {
-                                    self.parsers
-                                        .0
-                                        .parse(remaining)
-                                        .map(|(remaining, a0)| (remaining, (a0, a1, a2)))
-                                },
-                            ),
-                        }
-                    }
-                    Err(()) => self
-                        .parsers
-                        .2
-                        .parse(input.clone())
-                        .and_then(|(remaining, a2)| {
-                            match self.parsers.0.parse(remaining.clone()) {
-                                Ok((remaining, a0)) => self
-                                    .parsers
-                                    .1
-                                    .parse(remaining)
-                                    .map(|(remaining, a1)| (remaining, (a0, a1, a2))),
-                                Err(()) => self.parsers.1.parse(remaining.clone()).and_then(
-                                    |(remaining, a1)| {
-                                        self.parsers
-                                            .0
-                                            .parse(remaining)
-                                            .map(|(remaining, a0)| (remaining, (a0, a1, a2)))
-                                    },
-                                ),
-                            }
-                        }),
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        let a0 = &self.parsers.0;
+        let a1 = &self.parsers.1;
+        let a2 = &self.parsers.2;
+
+
+        if let Ok((r, v0)) = a0.parse(input) {
+            if let Ok((r, v1)) = a1.parse(r) {
+                if let Ok((r, v2)) = a2.parse(r) {
+                    return Ok((r, (v0, v1, v2)));
                 }
             }
+
+            if let Ok((r, v2)) = a2.parse(r) {
+                let (r, v1) = a1.parse(r)?;
+                return Ok((r, (v0, v1, v2)));
+            }
         }
+
+        if let Ok((r, v1)) = a1.parse(input) {
+            if let Ok((r, v0)) = a0.parse(r) {
+                let (r, v2) = a2.parse(r)?;
+                return Ok((r, (v0, v1, v2)));
+            }
+
+            if let Ok((r, v2)) = a2.parse(r) {
+                let (r, v0) = a0.parse(r)?;
+                return Ok((r, (v0, v1, v2)));
+            }
+        }
+
+        if let Ok((r, v2)) = a2.parse(input) {
+            if let Ok((r, v0)) = a0.parse(r) {
+                let (r, v1) = a1.parse(r)?;
+                return Ok((r, (v0, v1, v2)));
+            }
+            // 2-1-0
+            let (r, v1) = a1.parse(r)?;
+            let (r, v0) = a0.parse(r)?;
+            return Ok((r, (v0, v1, v2)));
+        }
+
+        Err(())
     }
 }
-/// Конструктор [Permutation] для трёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn permutation3<A0: Parser, A1: Parser, A2: Parser>(
     a0: A0,
     a1: A1,
@@ -522,50 +509,46 @@ fn permutation3<A0: Parser, A1: Parser, A2: Parser>(
         parsers: (a0, a1, a2),
     }
 }
-/// Комбинатор списка из любого числа элементов, которые надо читать
-/// вложенным парсером. Граница списка определяется квадратными (`[`&`]`)
-/// скобками.
-/// Для простоты реализации, после каждого элемента списка должна быть запятая
+
 #[derive(Debug, Clone)]
 struct List<T> {
     parser: T,
 }
 impl<T: Parser> Parser for List<T> {
     type Dest = Vec<T::Dest>;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        let mut remaining = input
-            .trim_start()
-            .strip_prefix('[')
-            .ok_or(())?
-            .trim_start()
-            .to_string();
-        let mut result = Vec::new();
-        while !remaining.is_empty() {
-            match remaining.strip_prefix(']') {
-                Some(remaining) => return Ok((remaining.trim_start().to_string(), result)),
-                None => {
-                    let (new_remaining, item) = self.parser.parse(remaining.to_string())?;
-                    let new_remaining = new_remaining
-                        .trim_start()
-                        .strip_prefix(',')
-                        .ok_or(())?
-                        .trim_start()
-                        .to_string();
-                    result.push(item);
-                    remaining = new_remaining;
-                }
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        // 1) [
+        let mut rest = input.trim_start();
+        rest = rest.strip_prefix('[').ok_or(())?;
+        rest = rest.trim_start();
+
+        let mut out = Vec::new();
+
+        loop {
+            rest = rest.trim_start();
+
+            // 2) ]
+            if let Some(after) = rest.strip_prefix(']') {
+                return Ok((after.trim_start(), out));
             }
+
+            // 3) element
+            let (after_item, item) = self.parser.parse(rest)?;
+            out.push(item);
+
+            // 4) обязательная запятая после каждого элемента (как у тебя в условиях)
+            rest = after_item.trim_start();
+            rest = rest.strip_prefix(',').ok_or(())?;
+            rest = rest.trim_start();
         }
-        Err(()) // строка кончилась, не закрыв скобку
     }
 }
-/// Конструктор для [List]
+
 fn list<T: Parser>(parser: T) -> List<T> {
     List { parser }
 }
-/// Комбинатор, который вернёт тот результат, который будет успешно
-/// получен первым из дочерних комбинаторов
-/// (аналог `alt` из `nom`)
+
 #[derive(Debug, Clone)]
 struct Alt<T> {
     parser: T,
@@ -576,15 +559,15 @@ where
     A1: Parser<Dest = Dest>,
 {
     type Dest = Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        if let Ok(ok) = self.parser.0.parse(input.clone()) {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        if let Ok(ok) = self.parser.0.parse(input) {
             return Ok(ok);
         }
         self.parser.1.parse(input)
     }
 }
-/// Конструктор [Alt] для двух парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn alt2<Dest, A0: Parser<Dest = Dest>, A1: Parser<Dest = Dest>>(a0: A0, a1: A1) -> Alt<(A0, A1)> {
     Alt { parser: (a0, a1) }
 }
@@ -595,19 +578,18 @@ where
     A2: Parser<Dest = Dest>,
 {
     type Dest = Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        // match вместо тут не подойдёт - нужно лениво
-        if let Ok(ok) = self.parser.0.parse(input.clone()) {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        if let Ok(ok) = self.parser.0.parse(input) {
             return Ok(ok);
         }
-        if let Ok(ok) = self.parser.1.parse(input.clone()) {
+        if let Ok(ok) = self.parser.1.parse(input) {
             return Ok(ok);
         }
-        self.parser.2.parse(input.clone())
+        self.parser.2.parse(input)
     }
 }
-/// Конструктор [Alt] для трёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn alt3<Dest, A0: Parser<Dest = Dest>, A1: Parser<Dest = Dest>, A2: Parser<Dest = Dest>>(
     a0: A0,
     a1: A1,
@@ -625,21 +607,21 @@ where
     A3: Parser<Dest = Dest>,
 {
     type Dest = Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        if let Ok(ok) = self.parser.0.parse(input.clone()) {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        if let Ok(ok) = self.parser.0.parse(input) {
             return Ok(ok);
         }
-        if let Ok(ok) = self.parser.1.parse(input.clone()) {
+        if let Ok(ok) = self.parser.1.parse(input) {
             return Ok(ok);
         }
-        if let Ok(ok) = self.parser.2.parse(input.clone()) {
+        if let Ok(ok) = self.parser.2.parse(input) {
             return Ok(ok);
         }
-        self.parser.3.parse(input.clone())
+        self.parser.3.parse(input)
     }
 }
-/// Конструктор [Alt] для четырёх парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn alt4<
     Dest,
     A0: Parser<Dest = Dest>,
@@ -656,7 +638,8 @@ fn alt4<
         parser: (a0, a1, a2, a3),
     }
 }
-impl<A0, A1, A2, A3, A4, A5, A6, A7, Dest> Parser for Alt<(A0, A1, A2, A3, A4, A5, A6, A7)>
+impl<A0, A1, A2, A3, A4, A5, A6, A7, Dest> Parser
+for Alt<(A0, A1, A2, A3, A4, A5, A6, A7)>
 where
     A0: Parser<Dest = Dest>,
     A1: Parser<Dest = Dest>,
@@ -668,33 +651,19 @@ where
     A7: Parser<Dest = Dest>,
 {
     type Dest = Dest;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
-        if let Ok(ok) = self.parser.0.parse(input.clone()) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.1.parse(input.clone()) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.2.parse(input.clone()) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.3.parse(input.clone()) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.4.parse(input.clone()) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.5.parse(input.clone()) {
-            return Ok(ok);
-        }
-        if let Ok(ok) = self.parser.6.parse(input.clone()) {
-            return Ok(ok);
-        }
-        self.parser.7.parse(input.clone())
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
+        if let Ok(ok) = self.parser.0.parse(input) { return Ok(ok); }
+        if let Ok(ok) = self.parser.1.parse(input) { return Ok(ok); }
+        if let Ok(ok) = self.parser.2.parse(input) { return Ok(ok); }
+        if let Ok(ok) = self.parser.3.parse(input) { return Ok(ok); }
+        if let Ok(ok) = self.parser.4.parse(input) { return Ok(ok); }
+        if let Ok(ok) = self.parser.5.parse(input) { return Ok(ok); }
+        if let Ok(ok) = self.parser.6.parse(input) { return Ok(ok); }
+        self.parser.7.parse(input)
     }
 }
-/// Конструктор [Alt] для восьми парсеров
-/// (в Rust нет чего-то, вроде variadic templates из C++)
+
 fn alt8<
     Dest,
     A0: Parser<Dest = Dest>,
@@ -720,34 +689,33 @@ fn alt8<
     }
 }
 
-/// Комбинатор для применения дочернего парсера N раз
-/// (аналог `take` из `nom`)
 struct Take<T> {
     count: usize,
     parser: T,
 }
 impl<T: Parser> Parser for Take<T> {
     type Dest = Vec<T::Dest>;
-    fn parse(&self, input: String) -> Result<(String, Self::Dest), ()> {
+
+    fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, Self::Dest), ()> {
         let mut remaining = input;
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(self.count);
+
         for _ in 0..self.count {
-            let (new_remaining, new_result) = self.parser.parse(remaining)?;
-            result.push(new_result);
-            remaining = new_remaining;
+            let (r, item) = self.parser.parse(remaining)?;
+            result.push(item);
+            remaining = r;
         }
+
         Ok((remaining, result))
     }
 }
-/// Конструктор `Take`
+
 fn take<T: Parser>(count: usize, parser: T) -> Take<T> {
     Take { count, parser }
 }
 
 const AUTHDATA_SIZE: usize = 1024;
 
-// подсказка: довольно много места на стэке
-/// Данные для авторизации
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthData([u8; AUTHDATA_SIZE]);
 impl Parsable for AuthData {
@@ -759,13 +727,11 @@ impl Parsable for AuthData {
     }
 }
 
-/// Конструкция 'либо-либо'
 enum Either<Left, Right> {
     Left(Left),
     Right(Right),
 }
 
-/// Статус, которые можно парсить
 enum Status {
     Ok,
     Err(String),
@@ -789,7 +755,6 @@ impl Parsable for Status {
     }
 }
 
-/// Пара 'сокращённое название предмета' - 'его описание'
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssetDsc {
     // `dsc` aka `description`
@@ -849,7 +814,7 @@ impl Parsable for Backet {
         )
     }
 }
-/// Фиатные деньги конкретного пользователя
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserCash {
     pub user_id: String,
@@ -881,7 +846,7 @@ impl Parsable for UserCash {
         )
     }
 }
-/// [Backet] конкретного пользователя
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserBacket {
     pub user_id: String,
@@ -913,7 +878,7 @@ impl Parsable for UserBacket {
         )
     }
 }
-/// [Бакеты](Backet) конкретного пользователя
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserBackets {
     pub user_id: String,
@@ -948,7 +913,7 @@ impl Parsable for UserBackets {
         )
     }
 }
-/// Список опубликованных бакетов
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Announcements(Vec<UserBackets>);
 impl Parsable for Announcements {
@@ -961,72 +926,49 @@ impl Parsable for Announcements {
     }
 }
 
-// просто обёртки
-// подсказка: почему бы не заменить на один дженерик?
-/// Обёртка для парсинга [AssetDsc]
-pub fn just_parse_asset_dsc(input: String) -> Result<(String, AssetDsc), ()> {
-    <AssetDsc as Parsable>::parser().parse(input)
-}
-/// Обёртка для парсинга [Backet]
-pub fn just_parse_backet(input: String) -> Result<(String, Backet), ()> {
-    <Backet as Parsable>::parser().parse(input)
-}
-/// Обёртка для парсинга [UserCash]
-pub fn just_user_cash(input: String) -> Result<(String, UserCash), ()> {
-    <UserCash as Parsable>::parser().parse(input)
-}
-/// Обёртка для парсинга [UserBacket]
-pub fn just_user_backet(input: String) -> Result<(String, UserBacket), ()> {
-    <UserBacket as Parsable>::parser().parse(input)
-}
-/// Обёртка для парсинга [UserBackets]
-pub fn just_user_backets(input: String) -> Result<(String, UserBackets), ()> {
-    <UserBackets as Parsable>::parser().parse(input)
-}
-/// Обёртка для парсинга [Announcements]
-pub fn just_parse_anouncements(input: String) -> Result<(String, Announcements), ()> {
-    <Announcements as Parsable>::parser().parse(input)
+pub fn just_parse<T: Parsable>(
+    input: &str,
+) -> Result<(&str, T), ()> {
+    T::parser().parse(input)
 }
 
-/// Все виды логов
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogKind {
     System(SystemLogKind),
     App(AppLogKind),
 }
-/// Все виды [системных](LogKind) логов
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SystemLogKind {
     Error(SystemLogErrorKind),
     Trace(SystemLogTraceKind),
 }
-/// Trace [системы](SystemLogKind)
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SystemLogTraceKind {
     SendRequest(String),
     GetResponse(String),
 }
-/// Error [системы](SystemLogKind)
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SystemLogErrorKind {
     NetworkError(String),
     AccessDenied(String),
 }
-/// Все виды [логов приложения](LogKind) логов
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppLogKind {
     Error(AppLogErrorKind),
     Trace(AppLogTraceKind),
     Journal(AppLogJournalKind),
 }
-/// Error [приложения](AppLogKind)
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppLogErrorKind {
     LackOf(String),
     SystemError(String),
 }
-// подсказка: а поля не слишком много места на стэке занимают?
-/// Trace [приложения](AppLogKind)
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppLogTraceKind {
     Connect(AuthData),
@@ -1034,7 +976,7 @@ pub enum AppLogTraceKind {
     Check(Announcements),
     GetResponse(String),
 }
-/// Журнал [приложения](AppLogKind), самые высокоуровневые события
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppLogJournalKind {
     CreateUser {
@@ -1424,7 +1366,7 @@ impl Parsable for LogKind {
         ))
     }
 }
-/// Строка логов, [лог](AppLogKind) с `request_id`
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LogLine {
     pub kind: LogKind,
@@ -1449,20 +1391,17 @@ impl Parsable for LogLine {
     }
 }
 
-/// Парсер строки логов
 pub struct LogLineParser {
     parser: std::sync::OnceLock<<LogLine as Parsable>::Parser>,
 }
 impl LogLineParser {
-    pub fn parse(&self, input: String) -> Result<(String, LogLine), ()> {
+    pub fn parse<'a>(&self, input: &'a str) -> Result<(&'a str, LogLine), ()> {
         self.parser
             .get_or_init(|| <LogLine as Parsable>::parser())
             .parse(input)
     }
 }
-// подсказка: singleton, без которого можно обойтись
-// парсеры не страшно вытащить в pub
-/// Единожды собранный парсер логов
+
 pub static LOG_LINE_PARSER: LogLineParser = LogLineParser {
     parser: std::sync::OnceLock::new(),
 };
@@ -1615,7 +1554,7 @@ mod test {
     #[test]
     fn test_authdata() {
         let s = "30c305825b900077ae7f8259c1c328aa3e124a07f3bfbbf216dfc6e308beea6e474b9a7ea6c24d003a6ae4fcf04a9e6ef7c7f17cdaa0296f66a88036badcf01f053da806fad356546349deceff24621b895440d05a715b221af8e9e068073d6dec04f148175717d3c2d1b6af84e2375718ab4a1eba7e037c1c1d43b4cf422d6f2aa9194266f0a7544eaeff8167f0e993d0ea6a8ddb98bfeb8805635d5ea9f6592fd5297e6f83b6834190f99449722cd0de87a4c122f08bbe836fd3092e5f0d37a3057e90f3dd41048da66cad3e8fd3ef72a9d86ecd9009c2db996af29dc62af5ef5eb04d0e16ce8fcecba92a4a9888f52d5d575e7dbc302ed97dbf69df15bb4f5c5601d38fbe3bd89d88768a6aed11ce2f95a6ad30bb72e787bfb734701cea1f38168be44ea19d3e98dd3c953fdb9951ac9c6e221bb0f980d8f0952ac8127da5bda7077dd25ffc8e1515c529f29516dacec6be9c084e6c91698267b2aed9038eca5ebafad479c5fb17652e25bb5b85586fae645bd7c3253d9916c0af65a20253412d5484ac15d288c6ca8823469090ded5ce0975dada63653797129f0e926af6247b457b067db683e37d848e0acf30e5602b78f1848e8da4b640ed08b75f3519a40ec96b2be964234beab37759504376c6e5ebfacdc57e4c7a22cf1e879d7bde29a2dca5fe20420215b59d102fd016606c533e8e36f7da114910664bade9b295d9043a01bc0dc4d8abbc16b1cec7789d89e699ad99dae597c7f10d6f047efc011d67444695cb8e6e8b3dba17ccc693729d01312d0f12a3fc76e12c2e4984af5cb3049b9d8a13124a1f770e96bae1fb153ba4c91bea4fae6f03010275d5a9b14012bdd678e037934dc6762005de54b32a7684e03060d5cc80378e9bef05b8f0692202944401bd06e4553e4490a0e57c5a72fc8abb1f714e22ea950fb2f1de284d6ff3da435954de355c677f60db4252a510919cbe7dadfed0441cf125fd8894753af8114f2ddacb75c3daa460920fc47d285e59fe9110e4151fcef03fa246cd2dd9a4d573e1dbbda1c6968cf4f546289b95ce1bf0a55eea6531382826d4002bc46bf441ce16056d42b5a2079e299e3191c23a7604cde03de6081e06f93cfe632c9a6088cd328662d47a4954934832df5b5f3765dbe136114c73c55cb7ce639e5d40d1d1d8f540d3c8e1bc7423f032c0da5264353468f009c973eec0448e41f9289e8d9dadc68da77d3c3ab3a6477d44024f21fba0bd4477d81c6027657527aa0413b45f417cb7b3beea835a1d5d795414d38156324cb5c1303e9924dbe40cd497c4c23c221cb912058c939bea8b79b3fea360fecaa83375a9a84e338d9e863e8021ad2df4430b8dea0c1714e1bdc478f559705549ad738453ab65c0ffcc8cf0e3bafaf4afad75ecc4dfad0de0cfe27d50d656456ea6c361b76508357714079424";
-        let res = AuthData::parser().parse(s.to_string());
+        let res = AuthData::parser().parse(s);
         assert!(res.is_ok());
         assert_eq!(res.as_ref().unwrap().0.len(), 0);
     }

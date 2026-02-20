@@ -68,7 +68,9 @@ fn main() {
     let parsing_demo =
         r#"[UserBackets{"user_id":"Bob","backets":[Backet{"asset_id":"milk","count":3,},],},]"#
             .to_string();
-    let announcements = analysis::parse::just_parse_anouncements(parsing_demo).unwrap();
+    let (_, announcements) =
+        analysis::parse::just_parse::<analysis::parse::Announcements>(&parsing_demo).unwrap();
+    
     println!("demo-parsed: {:?}", announcements);
 
     let filename = args.file;
