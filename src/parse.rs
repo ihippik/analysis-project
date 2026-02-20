@@ -778,7 +778,6 @@ impl Parsable for AssetDsc {
         fn((String, String)) -> Self,
     >;
     fn parser() -> Self::Parser {
-        // комбинаторы парсеров - это круто
         map(
             delimited(
                 all2(
@@ -792,7 +791,7 @@ impl Parsable for AssetDsc {
         )
     }
 }
-/// Сведение о предмете в некотором количестве
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Backet {
     pub asset_id: String,
