@@ -52,6 +52,7 @@ mod stdp {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug)]
     pub struct I32;
     impl Parser for I32 {
@@ -117,6 +118,7 @@ mod stdp {
     }
 }
 
+#[allow(dead_code)]
 fn quote(input: &str) -> String {
     let mut result = String::from("\"");
     result.extend(
@@ -132,7 +134,7 @@ fn quote(input: &str) -> String {
     result
 }
 
-fn do_unquote<'a>(input: &'a str) -> Result<(&'a str, String), ()> {
+fn do_unquote(input: &str) -> Result<(&str, String), ()> {
     let mut it = input.strip_prefix('"').ok_or(())?.chars();
 
     let mut result = String::new();
@@ -153,7 +155,7 @@ fn do_unquote<'a>(input: &'a str) -> Result<(&'a str, String), ()> {
     Err(())
 }
 
-fn do_unquote_non_escaped<'a>(input: &'a str) -> Result<(&'a str, &'a str), ()> {
+fn do_unquote_non_escaped(input: &str) -> Result<(&str, &str), ()> {
     let s = input.strip_prefix('"').ok_or(())?;
     let pos = s.find('"').ok_or(())?;
 
@@ -180,6 +182,7 @@ fn unquote() -> Unquote {
     Unquote
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsIs;
 impl Parser for AsIs {
@@ -373,10 +376,12 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn all3<A0: Parser, A1: Parser, A2: Parser>(a0: A0, a1: A1, a2: A2) -> All<(A0, A1, A2)> {
     All { parser: (a0, a1, a2) }
 }
 
+#[allow(dead_code)]
 fn all4<A0: Parser, A1: Parser, A2: Parser, A3: Parser>(
     a0: A0,
     a1: A1,
@@ -727,11 +732,13 @@ impl Parsable for AuthData {
     }
 }
 
+#[allow(dead_code)]
 enum Either<Left, Right> {
     Left(Left),
     Right(Right),
 }
 
+#[allow(dead_code)]
 enum Status {
     Ok,
     Err(String),
